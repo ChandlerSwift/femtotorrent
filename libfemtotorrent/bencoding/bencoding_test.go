@@ -2,6 +2,8 @@ package bencoding
 
 import (
 	"bytes"
+	"io/ioutil"
+	"os"
 	"testing"
 )
 
@@ -136,6 +138,36 @@ func TestDecodeString(t *testing.T) {
 		if !bytes.Equal(resStr, c.want.([]byte)) {
 			t.Errorf("got %q, want %q", resStr, c.want)
 			return
+		}
+	}
+
+}
+
+func TestDecodeTorrentFile(t *testing.T) {
+	file, err := os.Open("testdata/debian-11.2.0-amd64-netinst.iso.torrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	b, err := ioutil.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTorrentDecode, err := Decode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// I'm skipping type assertion checks here; we can just panic if we need to
+	d := rawTorrentDecode.(map[string]interface{})
+
+	want := map[string]string{
+		"announce": "http://bttracker.debian.org:6969/announce",
+		"comment":  "\"Debian CD from cdimage.debian.org\"",
+	}
+	for k, v := range want {
+		if string(d[k].([]byte)) != v {
+			t.Errorf("Decode(...)['%v'] == %v, want %v", k, d[k], v)
 		}
 	}
 }
