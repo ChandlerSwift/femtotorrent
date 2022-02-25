@@ -65,7 +65,7 @@ func decodeFirstToken(b []byte) ([]byte, interface{}, error) {
 		return b[len+1:], i, err
 	case 'd': // dict
 		b = b[1:] // slurp up the 'd'
-		ret := make(map[interface{}]interface{})
+		ret := make(map[string]interface{})
 		for b[0] != 'e' {
 			var key, val interface{}
 			b, key, err = decodeFirstToken(b)
@@ -76,7 +76,20 @@ func decodeFirstToken(b []byte) ([]byte, interface{}, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			ret[key] = val
+			// We can't use []byte as a key because slices are unhashable, and
+			// map keys must be hashable. We could mayyyybe conditionally
+			// convert only byte slices to strings, or something, but that
+			// really muddies up the code. The spec isn't very clear on whether
+			// or not dict keys have to be strings, but in practice it seems
+			// that they always are, so this (usually) works fine. This _would_
+			// cause problems if a key wasn't a valid UTF-8 string, but again,
+			// that doesn't seem to be common (as the keys are usually human-
+			// readable anyway).
+			keyArr, ok := key.([]byte)
+			if !ok {
+				return nil, nil, fmt.Errorf("expected string key, got %T (%v)", key, key)
+			}
+			ret[string(keyArr)] = val
 		}
 		if b[0] != 'e' {
 			return nil, nil, fmt.Errorf("expected e at end of list, got %v", b[1])

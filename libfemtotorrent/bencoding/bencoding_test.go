@@ -64,10 +64,9 @@ func TestDecodeNumArr(t *testing.T) {
 func TestDecodeDict(t *testing.T) {
 	cases := []struct {
 		in   []byte
-		want map[interface{}]interface{}
+		want map[string]interface{}
 	}{
-		{[]byte("d3:foo3:bare"), map[interface{}]interface{}{"foo": "bar"}},
-		{[]byte("di1ei2ei3ei4ee"), map[interface{}]interface{}{1: 2, 3: 4}},
+		{[]byte("d3:onei1e3:twoi2e5:threei3ee"), map[string]interface{}{"one": 1, "two": 2, "three": 3}},
 	}
 	for _, c := range cases {
 		got, err := Decode(c.in)
@@ -75,13 +74,40 @@ func TestDecodeDict(t *testing.T) {
 			t.Fatalf("Decode returned error %v", err)
 		}
 
-		gotArr := got.([]interface{})
-		if len(gotArr) != len(c.want) {
-			t.Fatalf("Different length arrays, got %v, want %v", len(gotArr), len(c.want))
+		gotDict := got.(map[string]interface{})
+
+		if len(gotDict) != len(c.want) {
+			t.Fatalf("Different length arrays, got %v, want %v", len(gotDict), len(c.want))
 		}
-		for i := range gotArr {
-			if gotArr[i] != c.want[i] {
-				t.Errorf("Decode(%q)[%v] == %q, want %q", c.in, i, gotArr[i], c.want[i])
+		for k, v := range gotDict {
+			if v != c.want[k] {
+				t.Errorf("Decode(%q)[%v] == %q (%T), want %q (%T)", c.in, k, v, v, c.want[k], c.want[k])
+			}
+		}
+	}
+}
+
+func TestDecodeStringDict(t *testing.T) {
+	cases := []struct {
+		in   []byte
+		want map[string]interface{}
+	}{
+		{[]byte("d3:foo3:bare"), map[string]interface{}{"foo": []byte("bar")}},
+	}
+	for _, c := range cases {
+		got, err := Decode(c.in)
+		if err != nil {
+			t.Fatalf("Decode returned error %v", err)
+		}
+
+		gotDict := got.(map[string]interface{})
+
+		if len(gotDict) != len(c.want) {
+			t.Fatalf("Different length arrays, got %v, want %v", len(gotDict), len(c.want))
+		}
+		for k, v := range gotDict {
+			if !bytes.Equal(v.([]byte), c.want[k].([]byte)) {
+				t.Errorf("Decode(%q)[%v] == %q (%T), want %q (%T)", c.in, k, v, v, c.want[k], c.want[k])
 			}
 		}
 	}
