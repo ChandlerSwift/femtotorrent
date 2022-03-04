@@ -23,6 +23,7 @@ package bencoding
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"strconv"
 )
 
@@ -124,6 +125,46 @@ func Decode(b []byte) (interface{}, error) {
 	return result, nil
 }
 
-func Encode(i interface{}) []byte {
-	panic("unimplemented")
+func Encode(i interface{}) ([]byte, error) {
+	switch reflect.TypeOf(i).Kind() {
+	case reflect.Int:
+		return []byte(fmt.Sprintf("i%ve", i.(int))), nil
+	case reflect.Slice:
+		if reflect.TypeOf(i).Elem().Kind() == reflect.Uint8 { // string
+			return []byte(fmt.Sprintf("%v:%s", len(i.([]byte)), i.([]byte))), nil
+		}
+		var b bytes.Buffer
+		b.Write([]byte("l"))
+		for _, el := range i.([]interface{}) {
+			val, err := Encode(el)
+			if err != nil {
+				return nil, err
+			}
+			b.Write(val)
+		}
+		b.Write([]byte("e"))
+		return b.Bytes(), nil
+	case reflect.Map:
+		var b bytes.Buffer
+		b.Write([]byte("d"))
+		for key, value := range i.(map[string]interface{}) {
+			val, err := Encode(key)
+			if err != nil {
+				return nil, err
+			}
+			b.Write(val)
+			val, err = Encode(value)
+			if err != nil {
+				return nil, err
+			}
+			b.Write(val)
+		}
+		b.Write([]byte("e"))
+		return b.Bytes(), nil
+	case reflect.String:
+		return []byte(fmt.Sprintf("%v:%v", len(i.(string)), i.(string))), nil
+	default:
+
+		return nil, fmt.Errorf("Unknown kind %v (%v)", reflect.TypeOf(i).Kind(), i)
+	}
 }

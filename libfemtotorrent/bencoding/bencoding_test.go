@@ -144,7 +144,7 @@ func TestDecodeString(t *testing.T) {
 }
 
 func TestDecodeTorrentFile(t *testing.T) {
-	file, err := os.Open("testdata/debian-11.2.0-amd64-netinst.iso.torrent")
+	file, err := os.Open("../testdata/debian-11.2.0-amd64-netinst.iso.torrent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +168,50 @@ func TestDecodeTorrentFile(t *testing.T) {
 	for k, v := range want {
 		if string(d[k].([]byte)) != v {
 			t.Errorf("Decode(...)['%v'] == %v, want %v", k, d[k], v)
+		}
+	}
+}
+
+func TestRoundTripEncodeDecode(t *testing.T) {
+	file, err := os.Open("../testdata/debian-11.2.0-amd64-netinst.iso.torrent")
+	debtorrent, err := ioutil.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	cases := [][]byte{
+		// ints
+		[]byte("i0e"),
+		[]byte("i1e"),
+		[]byte("i10e"),
+		[]byte("i123e"),
+		[]byte("i-1e"),
+
+		// strings
+		[]byte("3:abc"),
+		[]byte("3:foo"),
+
+		// lists
+		[]byte("li1ee"),
+		[]byte("li0ee"),
+		[]byte("li2ei3ee"),
+		[]byte("li-2ei-3ee"),
+
+		// real-world test
+		debtorrent,
+	}
+	for _, c := range cases {
+		decoded, err := Decode(c)
+		if err != nil {
+			t.Fatalf("Error decoding %v: %e", c, err)
+		}
+		newCase, err := Encode(decoded)
+		if err != nil {
+			t.Fatalf("Error encoding %+v: %e", decoded, err)
+		}
+
+		if !bytes.Equal(newCase, c) {
+			t.Fatalf("Encode(Decode(%v)) = %v", string(c), string(newCase))
 		}
 	}
 }
