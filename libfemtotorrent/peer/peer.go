@@ -25,14 +25,28 @@ func (p *Peer) Handle(tf torrentfile.TorrentFile) (err error) {
 	if err != nil {
 		return
 	}
+	currentPiece := uint32(0)
+	currentOffset := uint32(0)
+	isOutstandingPiece := false
+	currentPieceBuf := bytes.Buffer{}
 	for {
 		if !p.IncomingChoked && !p.Interested {
 			log.Println("Declaring our interest")
-			log.Println("Requesting chunk 0@0")
-			p.Request(0, 0, 2<<14)
 			p.DeclareInterested()
 		}
-		buf := make([]byte, 65536)
+		if !p.IncomingChoked && !isOutstandingPiece {
+			remainingSize := tf.Info.PieceLength - currentPieceBuf.Len()
+			var reqLen uint32
+			if remainingSize < 2<<13 {
+				reqLen = uint32(remainingSize)
+			} else {
+				reqLen = 2 << 13
+			}
+			log.Printf("Requesting chunk %v@%v (%v bytes)", currentPiece, currentOffset, reqLen)
+			p.Request(currentPiece, currentOffset, reqLen)
+			isOutstandingPiece = true
+		}
+		buf := make([]byte, 65536) // TODO: don't allocate each time around
 		var n int
 		n, err = p.conn.Read(buf)
 		if err != nil {
@@ -56,6 +70,40 @@ func (p *Peer) Handle(tf torrentfile.TorrentFile) (err error) {
 				return
 			}
 			log.Printf("Received a have message for piece %v", piece)
+		case 7: // piece
+			if n != 4+1+4+4+2<<13 {
+				return fmt.Errorf("Unexpected piece message size %v", n)
+			}
+			var index, begin uint64
+			index, err = binary.ReadUvarint(bytes.NewBuffer(buf[5:9]))
+			if err != nil {
+				return
+			}
+			if uint32(index) != currentPiece {
+				return fmt.Errorf("Expecting piece %v, got piece %v", currentPiece, index)
+			}
+			begin, err = binary.ReadUvarint(bytes.NewBuffer(buf[9:13]))
+			if err != nil {
+				return
+			}
+			if uint32(begin) != currentOffset {
+				return fmt.Errorf("Expecting offset %v, got offset %v", currentOffset, begin)
+			}
+			log.Printf("Received %v bytes of %v@%v", n-4-1-4-4, index, begin)
+			currentPieceBuf.Write(buf[13:n])
+			if currentPieceBuf.Len() == tf.Info.PieceLength {
+				// TODO: check hashes
+				p.Have(uint32(index))
+				// advance to the next piece
+				currentPiece++
+				currentOffset = 0
+				// TODO: flush to disk
+				if int(currentPiece) == len(tf.Info.Pieces) {
+					log.Println("Download complete!")
+					return nil
+				}
+			}
+			isOutstandingPiece = false
 		default:
 			log.Printf("In loop, received %v bytes: %q", n, buf[:n])
 		}
@@ -144,9 +192,18 @@ func (p *Peer) DeclareNotInterested() {
 	p.conn.Write([]byte{0, 0, 0, 1, 3})
 }
 
-func (p *Peer) Have() {
-	panic("unimplemented") // TODO
-	p.conn.Write([]byte{4})
+func (p *Peer) Have(index uint32) error {
+	msg := struct {
+		LengthPrefix uint32
+		MessageType  uint8
+		Index        uint32
+	}{
+		LengthPrefix: 1 + 4,
+		MessageType:  4,
+		Index:        index,
+	}
+
+	return binary.Write(p.conn, binary.BigEndian, msg)
 }
 
 func (p *Peer) Bitfield() {
@@ -166,7 +223,7 @@ func (p *Peer) Request(index, begin, length uint32) error {
 		Begin        uint32
 		Length       uint32
 	}{
-		LengthPrefix: 4 + 1 + 4 + 4 + 4,
+		LengthPrefix: 1 + 4 + 4 + 4,
 		MessageType:  6,
 		Index:        index,
 		Begin:        begin,

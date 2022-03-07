@@ -18,10 +18,11 @@ type TorrentFile struct {
 }
 
 type TorrentFileInfo struct {
-	Length int    // Either this or Files is present
-	Files  []File // Either this or Length is present
-	Name   string
-	Pieces [][]byte
+	Length      int    // Either this or Files is present
+	Files       []File // Either this or Length is present
+	Name        string
+	Pieces      [][]byte
+	PieceLength int
 }
 
 type File struct {
@@ -71,11 +72,18 @@ func DecodeTorrentFile(data []byte) (tf TorrentFile, err error) {
 		return
 	}
 	tf.InfoHash = sha1.Sum(infoBytes)
+
 	name, ok := info["name"].([]byte)
 	if !ok {
 		return tf, fmt.Errorf("name property not found in info")
 	}
 	tf.Info.Name = string(name)
+
+	pieceLength, ok := info["piece length"].(int)
+	if !ok {
+		return tf, fmt.Errorf("piece length property not found in info")
+	}
+	tf.Info.PieceLength = pieceLength
 
 	if tf.Info.Length, ok = info["length"].(int); !ok {
 		return tf, fmt.Errorf("length property not found in info")
