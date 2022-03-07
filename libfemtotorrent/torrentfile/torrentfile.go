@@ -89,5 +89,13 @@ func DecodeTorrentFile(data []byte) (tf TorrentFile, err error) {
 		return tf, fmt.Errorf("length property not found in info")
 	}
 
+	rawPieces, ok := info["pieces"].([]byte)
+	if !ok {
+		return tf, fmt.Errorf("pieces property not found in info")
+	}
+	for i := 0; i < len(rawPieces); i += 20 {
+		tf.Info.Pieces = append(tf.Info.Pieces, rawPieces[i:i+20])
+	}
+
 	return
 }
