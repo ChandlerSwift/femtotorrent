@@ -3,8 +3,10 @@ package main
 import (
 	"io/ioutil"
 	"log"
+	"net"
 	"os"
 
+	"github.com/chandlerswift/femtotorrent/libfemtotorrent/peer"
 	"github.com/chandlerswift/femtotorrent/libfemtotorrent/torrentfile"
 	"github.com/chandlerswift/femtotorrent/libfemtotorrent/tracker"
 )
@@ -29,6 +31,15 @@ func main() {
 	log.Println(peers, interval)
 	for _, peer := range peers {
 		log.Printf("%v:%d", string(peer.IPAddress), peer.Port)
+	}
+	localPeer := peer.Peer{
+		IPAddress: net.ParseIP("127.0.0.1"),
+		Port:      51413,
+	}
+
+	err = localPeer.Handle(tf)
+	if err != nil {
+		panic(err)
 	}
 
 }
