@@ -37,7 +37,14 @@ func main() {
 		Port:      51413,
 	}
 
-	err = localPeer.Handle(tf)
+	log.Printf("Writing to %v", tf.Info.Name)
+	f, err := os.OpenFile(tf.Info.Name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	err = localPeer.Handle(tf, f)
 	if err != nil {
 		panic(err)
 	}

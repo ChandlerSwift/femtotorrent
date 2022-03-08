@@ -2,10 +2,14 @@ package peer
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
 
 	"github.com/chandlerswift/femtotorrent/libfemtotorrent/torrentfile"
 )
@@ -20,7 +24,7 @@ type Peer struct {
 	ID             []byte
 }
 
-func (p *Peer) Handle(tf torrentfile.TorrentFile) (err error) {
+func (p *Peer) Handle(tf torrentfile.TorrentFile, f *os.File) (err error) {
 	err = p.connect(tf)
 	if err != nil {
 		return
@@ -46,13 +50,25 @@ func (p *Peer) Handle(tf torrentfile.TorrentFile) (err error) {
 			p.Request(currentPiece, currentOffset, reqLen)
 			isOutstandingPiece = true
 		}
-		buf := make([]byte, 65536) // TODO: don't allocate each time around
-		var n int
-		n, err = p.conn.Read(buf)
+		rawLen := make([]byte, 4)
+		_, err = io.ReadFull(p.conn, rawLen)
 		if err != nil {
 			return
 		}
-		switch buf[4] { // message type
+		msgLen := binary.BigEndian.Uint32(rawLen)
+		if msgLen == 0 {
+			log.Println("keepalive?")
+			continue
+		}
+		buf := make([]byte, msgLen) // TODO: don't allocate each time around
+		var n int
+		n, err = io.ReadFull(p.conn, buf)
+		if err != nil {
+			return
+		}
+		msgType := buf[0]
+		buf = buf[1:]
+		switch msgType { // message type
 		case 0:
 			log.Println("Received an incoming choke message")
 			p.IncomingChoked = true
@@ -64,48 +80,57 @@ func (p *Peer) Handle(tf torrentfile.TorrentFile) (err error) {
 		case 3:
 			log.Println("Received an incoming uninterested message")
 		case 4:
-			var piece uint64
-			piece, err = binary.ReadUvarint(bytes.NewBuffer(buf[5:9]))
-			if err != nil {
-				return
-			}
+			piece := binary.BigEndian.Uint32(buf)
 			log.Printf("Received a have message for piece %v", piece)
+		case 5:
+			log.Printf("Received a bitfield message: %q", buf)
 		case 7: // piece
-			if n != 4+1+4+4+2<<13 {
+			if n != 1+4+4+2<<13 {
 				return fmt.Errorf("Unexpected piece message size %v", n)
 			}
-			var index, begin uint64
-			index, err = binary.ReadUvarint(bytes.NewBuffer(buf[5:9]))
-			if err != nil {
-				return
-			}
-			if uint32(index) != currentPiece {
+			index := binary.BigEndian.Uint32(buf[:4])
+			if index != currentPiece {
 				return fmt.Errorf("Expecting piece %v, got piece %v", currentPiece, index)
 			}
-			begin, err = binary.ReadUvarint(bytes.NewBuffer(buf[9:13]))
-			if err != nil {
-				return
-			}
-			if uint32(begin) != currentOffset {
+			begin := binary.BigEndian.Uint32(buf[4:8])
+			if begin != currentOffset {
 				return fmt.Errorf("Expecting offset %v, got offset %v", currentOffset, begin)
 			}
-			log.Printf("Received %v bytes of %v@%v", n-4-1-4-4, index, begin)
-			currentPieceBuf.Write(buf[13:n])
+			log.Printf("Received %v bytes of %v@%v", len(buf)-4-4, index, begin)
+			currentPieceBuf.Write(buf[8:])
+
+			// Time for the next piece!
+			isOutstandingPiece = false
+			currentOffset += uint32(len(buf) - 4 - 4)
+			if currentPieceBuf.Len() > tf.Info.PieceLength {
+				return fmt.Errorf("We wrote more into the buffer than expected: have %v bytes, expecting %v", currentPieceBuf.Len(), tf.Info.PieceLength)
+			}
 			if currentPieceBuf.Len() == tf.Info.PieceLength {
-				// TODO: check hashes
+				piece := currentPieceBuf.Bytes()
+				checksum := sha1.Sum(piece)
+				if !bytes.Equal(checksum[:], tf.Info.Pieces[index]) {
+					return fmt.Errorf("Invalid checksum for piece %v: %v (expected %v)", index, hex.EncodeToString(checksum[:]), hex.EncodeToString(tf.Info.Pieces[index]))
+				}
 				p.Have(uint32(index))
+				n, err := f.Write(piece)
+				if err != nil {
+					return err
+				}
+				if n != len(piece) {
+					return fmt.Errorf("Tried to write %v bytes to %v, only wrote %v", currentPieceBuf.Len(), f.Name(), n)
+				}
+				log.Printf("Completed piece %v/%v", currentPiece, len(tf.Info.Pieces))
 				// advance to the next piece
 				currentPiece++
 				currentOffset = 0
-				// TODO: flush to disk
 				if int(currentPiece) == len(tf.Info.Pieces) {
 					log.Println("Download complete!")
 					return nil
 				}
+				currentPieceBuf.Reset()
 			}
-			isOutstandingPiece = false
 		default:
-			log.Printf("In loop, received %v bytes: %q", n, buf[:n])
+			log.Printf("In loop, received %v bytes: %q", len(buf), buf)
 		}
 	}
 }
