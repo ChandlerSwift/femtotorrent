@@ -24,31 +24,58 @@ type Peer struct {
 	ID             []byte
 }
 
+func any(bools []bool) bool {
+	for _, b := range bools {
+		if b {
+			return true
+		}
+	}
+	return false
+}
+
+func all(bools []bool) bool {
+	for _, b := range bools {
+		if !b {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *Peer) Handle(tf torrentfile.TorrentFile, f *os.File) (err error) {
 	err = p.connect(tf)
 	if err != nil {
 		return
 	}
+	const chunkSize int = 2 << 13
+	maxChunksPerPiece := (tf.Info.PieceLength + chunkSize - 1) / chunkSize
 	currentPiece := uint32(0)
-	currentOffset := uint32(0)
-	isOutstandingPiece := false
-	currentPieceBuf := bytes.Buffer{}
+	waitingForChunkOfPiece := make([]bool, maxChunksPerPiece)
+	currentPieceBuf := make([]byte, tf.Info.PieceLength)
 	for {
 		if !p.IncomingChoked && !p.Interested {
 			log.Println("Declaring our interest")
 			p.DeclareInterested()
 		}
-		if !p.IncomingChoked && !isOutstandingPiece {
-			remainingSize := tf.Info.PieceLength - currentPieceBuf.Len()
-			var reqLen uint32
-			if remainingSize < 2<<13 {
-				reqLen = uint32(remainingSize)
-			} else {
-				reqLen = 2 << 13
+
+		// Request all the fragments of this piece, if we're not currently
+		// downloading anything
+		if !p.IncomingChoked && !any(waitingForChunkOfPiece) {
+			log.Printf("Requesting piece %v/%v", currentPiece, len(tf.Info.Pieces))
+			// TODO: piece length for last piece
+			for i := 0; i < maxChunksPerPiece; i++ {
+				currentOffset := i * 2 << 13
+				remainingSize := tf.Info.PieceLength - int(currentOffset)
+				var reqLen uint32
+				if remainingSize < 2<<13 {
+					reqLen = uint32(remainingSize)
+				} else {
+					reqLen = 2 << 13
+				}
+				log.Printf("p.Request(%v, uint32(%v), %v)", currentPiece, currentOffset, reqLen)
+				p.Request(currentPiece, uint32(currentOffset), reqLen)
+				waitingForChunkOfPiece[i] = true
 			}
-			log.Printf("Requesting chunk %v@%v (%v bytes)", currentPiece, currentOffset, reqLen)
-			p.Request(currentPiece, currentOffset, reqLen)
-			isOutstandingPiece = true
 		}
 		rawLen := make([]byte, 4)
 		_, err = io.ReadFull(p.conn, rawLen)
@@ -86,48 +113,40 @@ func (p *Peer) Handle(tf torrentfile.TorrentFile, f *os.File) (err error) {
 			log.Printf("Received a bitfield message: %q", buf)
 		case 7: // piece
 			if n != 1+4+4+2<<13 {
-				return fmt.Errorf("Unexpected piece message size %v", n)
+				log.Printf("Unexpected piece message size %v", n)
 			}
 			index := binary.BigEndian.Uint32(buf[:4])
 			if index != currentPiece {
-				return fmt.Errorf("Expecting piece %v, got piece %v", currentPiece, index)
+				// TODO: error?
+				log.Printf("Expecting piece %v, got piece %v", currentPiece, index)
 			}
 			begin := binary.BigEndian.Uint32(buf[4:8])
-			if begin != currentOffset {
-				return fmt.Errorf("Expecting offset %v, got offset %v", currentOffset, begin)
-			}
 			log.Printf("Received %v bytes of %v@%v", len(buf)-4-4, index, begin)
-			currentPieceBuf.Write(buf[8:])
 
-			// Time for the next piece!
-			isOutstandingPiece = false
-			currentOffset += uint32(len(buf) - 4 - 4)
-			if currentPieceBuf.Len() > tf.Info.PieceLength {
-				return fmt.Errorf("We wrote more into the buffer than expected: have %v bytes, expecting %v", currentPieceBuf.Len(), tf.Info.PieceLength)
-			}
-			if currentPieceBuf.Len() == tf.Info.PieceLength {
-				piece := currentPieceBuf.Bytes()
-				checksum := sha1.Sum(piece)
+			copy(currentPieceBuf[begin:], buf[8:])
+
+			waitingForChunkOfPiece[begin/uint32(chunkSize)] = false
+
+			if !any(waitingForChunkOfPiece) {
+				checksum := sha1.Sum(currentPieceBuf)
 				if !bytes.Equal(checksum[:], tf.Info.Pieces[index]) {
 					return fmt.Errorf("Invalid checksum for piece %v: %v (expected %v)", index, hex.EncodeToString(checksum[:]), hex.EncodeToString(tf.Info.Pieces[index]))
 				}
 				p.Have(uint32(index))
-				n, err := f.Write(piece)
+				n, err := f.Write(currentPieceBuf) // TODO: shorter last chunk?
 				if err != nil {
 					return err
 				}
-				if n != len(piece) {
-					return fmt.Errorf("Tried to write %v bytes to %v, only wrote %v", currentPieceBuf.Len(), f.Name(), n)
+				if n != len(currentPieceBuf) {
+					return fmt.Errorf("Tried to write %v bytes to %v, only wrote %v", len(currentPieceBuf), f.Name(), n)
 				}
 				log.Printf("Completed piece %v/%v", currentPiece, len(tf.Info.Pieces))
 				// advance to the next piece
 				currentPiece++
-				currentOffset = 0
 				if int(currentPiece) == len(tf.Info.Pieces) {
 					log.Println("Download complete!")
 					return nil
 				}
-				currentPieceBuf.Reset()
 			}
 		default:
 			log.Printf("In loop, received %v bytes: %q", len(buf), buf)
