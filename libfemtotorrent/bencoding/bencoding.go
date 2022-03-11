@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 )
 
@@ -145,15 +146,23 @@ func Encode(i interface{}) ([]byte, error) {
 		b.Write([]byte("e"))
 		return b.Bytes(), nil
 	case reflect.Map:
+		m := i.(map[string]interface{})
+
+		var keys []string
+		for key := range m {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
 		var b bytes.Buffer
 		b.Write([]byte("d"))
-		for key, value := range i.(map[string]interface{}) {
+		for _, key := range keys {
 			val, err := Encode(key)
 			if err != nil {
 				return nil, err
 			}
 			b.Write(val)
-			val, err = Encode(value)
+			val, err = Encode(m[key])
 			if err != nil {
 				return nil, err
 			}
